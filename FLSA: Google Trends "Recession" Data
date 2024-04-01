@@ -1,1 +1,71 @@
 
+#Set working directory and download Google trends "Recession" data from 01/01/2004-01/03/2024, found at https://trends.google.com/trends/explore?date=all&q=Recession&hl=en-GB
+recession_data <- read.csv("Recession_Data_CSV.csv")
+head(recession_data)
+recession_data$Month <- seq_along(recession_data$Month)
+x <- recession_data$Month 
+y <- recession_data$Recession...Worldwide.
+plot(x, y, type = "l")
+#necessary packages
+library(igraph)
+library(genlasso)
+library(flsa)
+#applying 1d fused lasso to the data
+result <- fusedlasso1d(y)
+plot(result)
+#Tuning parameter values
+lambda_values = seq(1, 50, by = 1)  
+change_points = numeric(length(lambda_values))
+lambda2 <- 20:5000/10
+
+res <- flsa(y, lambda2=lambda2)
+
+num_changepoints <- numeric(200)
+
+# Loop over lambda values from 1 to 200
+for (lambda in 1:200) {
+  selected_lambda_index <- which(lambda2 == lambda)
+  
+  # Extract the fitted values for this lambda
+  if (length(selected_lambda_index) > 0) {  # Check if the lambda value exists in lambda2
+    fitted_values <- res[selected_lambda_index, ]
+    
+    # Calculate differences between successive fitted values
+    diffs <- diff(fitted_values)
+    
+    # Identify changepoints as indices where the absolute difference is large
+    threshold <- 5  # threshold
+    changepoints <- which(abs(diffs) > threshold)
+    
+    # Store the number of changepoints for this lambda
+    num_changepoints[lambda] <- length(changepoints)
+  }
+}
+
+# Plot the estimated number of changepoints for different lambda values
+plot(1:200, num_changepoints, type = "l", main = expression("Estimated Number of Changepoints vs."~lambda[2]), xlab = expression(~lambda[2]), ylab = "Number of Changepoints", col = "blue", pch = 19)
+#Create results matrix for FLSA performed with different tuning parameter values
+res <- flsa(y, lambda2=lambda2)
+#
+res[30,]
+fitted_values <- res[800, ]
+# Calculate differences between successive fitted values
+diffs <- diff(fitted_values)
+
+# Identify changepoints as indices where the absolute consecutive difference is large
+threshold <- 4  # threshold
+changepoints <- which(abs(diffs) > threshold)
+print(changepoints)
+#Plot the data so we can overlay the FLSA
+start_date <- as.Date("2004-01-01")
+dates <- seq(from = start_date, by = "month", length.out = length(y))
+six_month_indices <- seq(1, length(y), by = 6)
+month_labels <- format(dates[six_month_indices], "%b %Y")
+plot(1:length(y), y, type = "l", col = "blue", xaxt = "n")
+axis(side = 1, at = six_month_indices, labels = FALSE, las = 2)
+text(x = six_month_indices, y = par("usr")[3] - 0.05 * (par("usr")[4] - par("usr")[3]), labels = month_labels, srt = 45, adj = 1, xpd = TRUE)
+plot(x, y, type = "l", col = "blue")
+lines(x, fitted_values, col = "red", lty = 2)
+# vertical lines for changepoints
+abline(v = x[changepoints], col = "orange", lty = 10)
+legend("topright", legend = c("Original Data", "Fitted Values by Fused LASSO", "Estimated Changepoints"), col = c("blue", "red", "orange"), lty = c(1, 2, 3), cex = 0.8)
