@@ -1,0 +1,179 @@
+library(mcmcr) 
+library(coda)
+library(MASS)  
+library(mvtnorm)
+set.seed(908)
+N <- 100
+tau_true <- 50
+# Generate the x values, the sequence in which the observations are observed
+x <- 1:N
+# Create the indicator function I(t) indicating observations before and after changepoint
+I <- function(t, tau) {
+  as.numeric(t > tau)
+}
+
+# Create the design matrix X
+X <- cbind(1, x, I(x, tau_true), I(x, tau_true) * x)
+#True values of the regression coefficients
+beta_0 <- 3
+beta_1 <- 2
+beta_2 <- 8 # intercept after the change point
+beta_3 <- -1.5   # slope after the change point
+# Vector containing the true beta values
+beta_true <- c(beta_0, beta_1, beta_2, beta_3)
+# True variance of the errors
+sigma2_true <- 50
+# Generate the y values based on the model and plot the data
+y <- X %*% beta_true + rnorm(N, sd = sqrt(sigma2_true))
+plot(x, y, type = "l", main = "Linear Regression with Two Regimes", xlab = "t", ylab = expression(y[t]), pch = 19, col = "blue")
+# Add the first linear regression line (before the change point)
+lines(1:tau_true, beta_0 + beta_1 * (1:tau_true), col = "red", lwd = 2)
+# Add the second linear regression line (after the change point)
+lines((51):N, (beta_0 + beta_2) + (beta_1 + beta_3) * ((51):N), col = "green", lwd = 2)
+abline(v = tau_true, col = "black", lwd = 2, lty = 2)
+legend("topright", legend = c("Observation", "Changepoint"), col = c("blue", "black"), pch = c(19, NA), lty = c(NA, 2))
+#Set p as the number of columns of the Design Matrix
+p<-ncol(X)
+# Set hyperparameters for sigma^2
+delta <- 0.001
+omega <- 0.001
+#Alter variance-covariance matrix for beta coefficients
+Omega <- diag(0.3, p)
+# Gibbs sampler
+gibbs_sampler <- function(y, X, n_iter, delta, omega) {
+  N <- length(y)
+  p <- ncol(X)
+  initbeta <- c(1,2,3,4) 
+  initsigma2 <- 3
+  inittau <- 37
+  
+  # Priors
+  #set noninformative prior for betas
+  beta_prior_mean <- rep(0, p)
+  beta_prior_cov <- (Omega) # Large variance 
+  sigma2_prior_shape <- delta
+  sigma2_prior_rate <- omega
+  
+  # Storage for samples
+  samples_beta <- matrix(NA, nrow = n_iter, ncol = p)
+  samples_beta[1,] <- initbeta
+  samples_sigma2 <- numeric(n_iter)
+  samples_sigma2[1] <- initsigma2
+  samples_tau <- numeric(n_iter)
+  samples_tau[1] <- inittau
+  for (i in 2:n_iter) {
+    X_tau <- cbind(1, x, I(x, samples_tau[i-1]), I(x, samples_tau[i-1])*x)
+    # Update sigma2
+    errors <- y - X_tau %*% samples_beta[i-1,]
+    sigma2_shape <- sigma2_prior_shape + N / 2
+    sigma2_rate <- sigma2_prior_rate + 0.5 * (t(y) %*% y - t(solve(t(X_tau) %*% X_tau + beta_prior_cov) %*% (t(X_tau) %*% y))%*%(t(X_tau) %*% X_tau + beta_prior_cov)%*%solve(t(X_tau) %*% X_tau + beta_prior_cov) %*% (t(X_tau) %*% y))
+
+    sigma2 <- 1 / rgamma(1, shape = sigma2_shape, rate = sigma2_rate)
+    samples_sigma2[i] <- sigma2
+    
+    
+    # Update beta
+    XtX <- t(X_tau) %*% X_tau
+    XtX_inv <- solve(XtX + beta_prior_cov)
+    Xty <- t(X_tau) %*% y
+    beta_mean <- XtX_inv%*%(Xty)
+    beta_cov <- samples_sigma2[i]*XtX_inv
+    beta <- mvrnorm(1, mu = beta_mean, Sigma = beta_cov)
+    samples_beta[i, ] <- beta
+    
+    #Update Tau
+    log_prob_tau <- sapply(1:N, function(t) {
+      X_input <- cbind(1, x, I(x, t), I(x, t)*x)
+      term1 <- -(N/2)*log(2*pi*samples_sigma2[i])
+      term2 <- -(t(y-X_input%*%samples_beta[i,])%*%(y-X_input%*%samples_beta[i,]))/(2*samples_sigma2[i])
+    })
+    max_log_prob_tau <- max(log_prob_tau)
+    prob_tau <- exp(log_prob_tau - max_log_prob_tau)
+    prob_taus <- prob_tau / sum(prob_tau)
+    tau <- sample(1:N, 1, prob = prob_taus)
+    samples_tau[i] <- tau
+    
+    if( i%%100 == 0 ) cat("\n progress: iteration ",i," dones") #indicates how much longer we have to wait!
+    
+  }
+  return(list(beta = samples_beta, sigma2 = samples_sigma2, tau = samples_tau))
+}
+# Run the Gibbs sampler
+n_iter <- 10000
+samples <- gibbs_sampler(y, X, n_iter, delta, omega)
+#Discard burn-in
+burn_in <- 100
+#Define the posterior means
+posterior_means_beta <- colMeans(samples$beta[(burn_in + 1):n_iter, ])
+posterior_mean_sigma2 <- mean(samples$sigma2[(burn_in + 1):n_iter])
+# Calculate the frequency of each unique tau value and hence the posterior mode
+tau_samples <- samples$tau[(burn_in + 1):n_iter]
+tau_freq <- table(tau_samples)
+mode_tau <- as.numeric(names(tau_freq[tau_freq == max(tau_freq)]))
+# If multiple modes exist, this will return all of them
+print(mode_tau)
+posterior_mean_sigma2
+posterior_means_beta
+# Trace plots for beta parameters
+plot(as.mcmc(samples$tau), col = "blue", main = expression("Estimated Marginal Posterior Mass for" ~ tau))
+
+# Trace plot for sigma2
+traceplot(as.mcmc(samples$sigma2[burn_in + 1:n_iter]), col = "blue", main = expression("Trace Plot of all 10000 iterations for" ~ sigma^2))
+
+# Trace plot for tau
+plot(as.mcmc(samples$tau[burn_in + 1:n_iter]), main = "Trace Plot for Tau")
+
+samplest <- samples$tau[burn_in + 1:n_iter]
+sampless1 <- samples$sigma2[burn_in + 1:n_iter]
+samplesbeta0 <- samples$beta[(burn_in + 1):n_iter,1]
+samplesbeta1 <- samples$beta[(burn_in + 1):n_iter,2]
+samplesbeta2 <- samples$beta[(burn_in + 1):n_iter,3]
+samplesbeta3 <- samples$beta[(burn_in + 1):n_iter,4]
+# Compute the density of the samples over a specified range for visuals
+plot(density_samples, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Mass for " ~ tau), 
+     xlab = "Value", ylab = "Mass", 
+     xlim = c(49.9, 50.1))
+density_sampless1 <- density(sampless1)
+plot(density_sampless1, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Density for " ~ sigma^2), 
+     xlab = "Value", ylab = "Density", 
+)
+
+density_samplesb0 <- density(samplesbeta0)
+
+plot(density_samplesb0, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Density for " ~ beta[0]), 
+     xlab = "Value", ylab = "Density", 
+)
+
+density_samplesb1 <- density(samplesbeta1)
+
+plot(density_samplesb1, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Density for " ~ beta[1]), 
+     xlab = "Value", ylab = "Density", 
+)
+
+density_samplesb2 <- density(samplesbeta2)
+
+plot(density_samplesb2, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Density for " ~ beta[2]), 
+     xlab = "Value", ylab = "Density", 
+)
+
+density_samplesb3 <- density(samplesbeta3)
+
+plot(density_samplesb3, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Density for " ~ beta[3]), 
+     xlab = "Value", ylab = "Density", 
+)
+
+#Traceplots
+traceplot(as.mcmc(samplesbeta0), col = "blue", main = expression("Traceplot of samples (after burn-in discarded) for" ~ beta[0]))
+traceplot(as.mcmc(samplesbeta1), col = "blue", main = expression("Traceplot of samples (after burn-in discarded) for" ~ beta[1]))
+traceplot(as.mcmc(samplesbeta2), col = "blue", main = expression("Traceplot of samples (after burn-in discarded) for" ~ beta[2]))
+traceplot(as.mcmc(samplesbeta3), col = "blue", main = expression("Traceplot of samples (after burn-in discarded) for" ~ beta[3]))
+traceplot(as.mcmc(sampless1), col = "blue", main = expression("Traceplot of samples (after burn-in discarded) for" ~ sigma^2))
+plot(samplest, type = 'p', col = "blue", pch = 20, 
+     main = expression("Plot of samples (after burn-in discarded) for" ~ tau),
+     xlab = "Iteration", ylab = "Value")
