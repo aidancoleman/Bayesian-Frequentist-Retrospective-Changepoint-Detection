@@ -1,0 +1,148 @@
+set.seed(88)
+n=100
+tau<-50
+alpha_1<-2
+alpha_2<-20
+sig2_1<-1
+sig2_2<-50
+# Generate time series data
+Epsilon <- c(rnorm(tau, mean = 0, sd = sqrt(sig2_1)), 
+             rnorm(n - tau, mean = 0, sd = sqrt(sig2_2)))
+
+y <- rep(0, n)
+for (i in 1:n) 
+  if (i <= tau) {
+    y[i] <- alpha_1 + Epsilon[i]
+  } else {
+    y[i] <- alpha_2 + Epsilon[i]
+  }
+#SET HYPERPARAMETERS, OUR PRIOR BELEIFS 
+mu0_1 = 1
+mu0_2 = 18
+ssquared0_1 = 10
+ssquared0_2 = 10
+initsig2_1 = 1.2
+initalpha_1 = 32
+initsig2_2 = 15
+initalpha_2 = 5
+initau = 33
+sumdata1 <- sum(y[1:tau])
+sumdata2 <- sum(y[(tau+1):n])
+omega1 = 0.001
+delta1 = 0.001
+omega2 = 0.001
+delta2 = 0.001
+#Number of iterations
+n_iter = 100000
+#Generate sample storage matrix
+res <- matrix(0, nrow = n_iter, ncol = 5)
+shape1 = delta1 + 0.5*tau
+shape2 = delta2 + 0.5*(n-tau)
+#Plotting the data
+plot(1:n, y, type = "l", col = "blue", xlab = "t", ylab = expression(y[t]), main = "Sequence of observations with a change in mean and variance")
+abline(v = tau, col = "red", lty = 2) 
+segments(x0 = 1, y0 = 2, x1 = 50, y1 = 2, col = "blue")
+segments(x0 = 51, y0 = 5, x1 = 100, y1 = 5, col = "green")
+#Set number of iterations for sampler
+data = y
+#column 1: sigma_1^2, column 2: alpha_1, column 3: sigma_2^2, column 4: alpha_2, column 5: tau
+res[1,]<-c(initsig2_1, initalpha_1, initsig2_2, initalpha_2, initau) 
+#Put initial values of parameters into the matrix
+initalpha_1 <- res[1,2]
+inisig2_1 <- res[1,1]
+initalpha_2 <- res[1,4]
+initsig2_2 <- res[1,3]
+initau <- res[1,5]
+#Define PMF for Tau using log-sum-exp
+log_prob_tau <- function(t, alpha_1, alpha_2, sigma2_1, sigma2_2, y) {
+  term1 <- -t * log(sigma2_1)
+  term2 <- -((n-1) - t) * log(sigma2_2)
+  term3 <- -0.5 * (sum((y[2:t] - alpha_1)^2) / sigma2_1)
+  term4 <- -0.5 * (sum((y[(t+1):(n-1)] - alpha_2)^2) / sigma2_2)
+  return(term1 + term2 + term3 + term4)
+}
+sample_tau <- function(alpha_1, alpha_2, sigma2_1, sigma2_2, y) {
+  log_probs <- sapply(2:(n-1), function(t) log_prob_tau(t, alpha_1, alpha_2, sigma2_1, sigma2_2, y))
+  lq <- max(log_probs)
+  probs <- exp(log_probs - lq)
+  probs <- probs / sum(probs) # Normalizing
+  return(sample(2:(n-1), 1, prob = probs))
+}
+#The Gibbs Sampler
+sampleGibbs <- function(initsig2_1, initalpha_1, initsig2_2, initalpha_2, initau, n_iter, data){
+  for(i in 2:n_iter){
+    #sample the values 
+    shape1 = delta1 + 0.5*res[i-1,5]
+    scale1 = omega1 + (sum((y[1:res[i-1,5]] - res[i-1,2])^2)/2)
+    res[i,1] <- 1/rgamma(1, shape=shape1, rate=scale1)
+    
+    mu1 = (sum(y[1:res[i-1,5]])/res[i,1] + mu0_1/ssquared0_1)/(res[i-1,5]/res[i,1] + 1/ssquared0_1)
+    ssquared1 = 1/(res[i-1,5]/res[i,1] + 1/ssquared0_1)
+    res[i,2] <- rnorm(1, mu1, ssquared1)
+    
+    shape2 = delta2 + 0.5*(n-res[i-1,5])
+    scale2 = omega2 + (sum((y[(res[i-1,5]+1):n] - res[i-1,4])^2)/2)
+    res[i,3] <- 1/rgamma(1, shape=shape2, rate=scale2)
+    
+    mu2 = (sum(y[(res[i-1,5]+1):n])/res[i,3] + mu0_2/ssquared0_2)/((n-res[i-1,5])/res[i,3] + 1/ssquared0_2)
+    ssquared2 = 1/((n-res[i-1,5])/res[i,3] + 1/ssquared0_2)
+    res[i,4] <- rnorm(1, mu2, ssquared2)
+   
+    # Compute tau
+    res[i, 5] <- sample_tau(res[i, 2], res[i, 4], res[i, 1], res[i, 3], y)
+        }
+      return(res)
+    }
+ #Arbitrary choices for initial values, this line runs the sampler 
+res <- sampleGibbs(1.2, 1.7, 15, 5, 33, n_iter, data)
+
+# Discard burn-in samples
+burn_in_iter <- 100
+res_trimmed <- res[(burn_in_iter + 1):n_iter, ]
+#Analyse the initial sampled values
+head(res_trimmed)
+#Load necessary packages for visualizing MCMC results
+library(mcmcr)
+library(coda)
+#Analyse posterior estimates and credible intervals
+summary(as.mcmc(res_trimmed))
+# Plot the estimated marginal densities 
+samplest <- res_trimmed[,5]
+# Compute the density/mass of the samples over a specified range for nicer visuals
+density_samplest <- density(samplest, from = 49.9, to = 50.1)
+plot(density_samples, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Mass for " ~ tau), 
+     xlab = "Value", ylab = "Mass", 
+     xlim = c(49.9, 50.1))
+sampless1 <- res_trimmed[,1]
+density_sampless1 <- density(sampless1)
+plot(density_sampless2, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Density for " ~ sigma[2]^2), 
+     xlab = "Value", ylab = "Density", 
+     )
+sampless2 <- res_trimmed[,3]
+density_sampless2 <- density(sampless2)
+plot(density_sampless2, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Density for " ~ sigma[2]^2), 
+     xlab = "Value", ylab = "Density", 
+)
+samplesa1 <- res_trimmed[,2]
+density_samplesa1 <- density(samplesa1)
+plot(density_samplesa1, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Density for " ~ alpha[1]), 
+     xlab = "Value", ylab = "Density", 
+)
+samplesa2 <- res_trimmed[,4]
+density_samplesa2 <- density(samplesa2)
+plot(density_samplesa2, type = "l", col = "blue", 
+     main = expression("Estimated Marginal Posterior Density for " ~ alpha[2]), 
+     xlab = "Value", ylab = "Density", 
+)
+#Traceplots of samples for each parameter
+traceplot(as.mcmc(res_trimmed[, 2]), col = "blue", main = expression("Traceplot of samples (after burn-in discarded) for" ~ alpha[1]))
+traceplot(as.mcmc(res_trimmed[, 4]), col = "blue", main = expression("Traceplot of samples (after burn-in discarded) for" ~ alpha[2]))
+traceplot(as.mcmc(res_trimmed[, 1]), col = "blue", main = expression("Traceplot of samples (after burn-in discarded) for" ~ sigma[1]^2))
+traceplot(as.mcmc(res_trimmed[, 3]), col = "blue", main = expression("Traceplot of samples (after burn-in discarded) for" ~ sigma[2]^2))
+plot(res_trimmed[, 5], type = 'p', col = "blue", pch = 20, 
+     main = expression("Plot of samples (after burn-in discarded) for" ~ tau),
+     xlab = "Iteration", ylab = "Value")
