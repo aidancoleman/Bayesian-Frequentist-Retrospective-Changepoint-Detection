@@ -1,0 +1,21 @@
+library(igraph)
+library(flsa)
+library(genlasso)
+#Download "well-log" data from Ó. Ruanaidh and Fitzgerald (1996), set Working Directory
+y <- scan("well_log_outliers.txt")
+x <- seq(1:4050)
+plot(x, y)
+outliers <- which(y==-1)
+length(outliers)
+x <- seq(1:3979)
+y <- y[-outliers]
+flasso <- flsa(y, lambda1 = 0, lambda2 = 100000)
+flassoutput <- flasso[1,]
+plot(x, y, pch=20, type="l", col="blue", xlab = "Depth", ylab = "Nuclear Magnetic Response")
+lines(flassoutput, col = "orange", lty = 1)
+diffs <- diff(flassoutput)
+changepoints <- which(abs(diffs)>1000)
+plot(x, y, pch=20, type="l", col="blue", main = "FLSA applied to the Well-Log data set", xlab = "Depth", ylab = "Nuclear Magnetic Response")
+lines(flassoutput, col = "orange", lty = 1)
+abline(v = x[changepoints], col = "black", lty = 2)
+legend("topright", legend = c("Original Data", "Fitted Values by Fused LASSO", "Estimated Changepoints"), col = c("blue", "orange", "black"), lty = c(1, 1, 2), cex = 0.8)
